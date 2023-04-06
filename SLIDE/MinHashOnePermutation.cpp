@@ -1,153 +1,194 @@
-#include <iostream>
-#include <unordered_map>
 #include "MinHashOnePermutation.h"
+#include <random>
+#include <iostream>
+#include <math.h>
+#include <vector>
 #include <climits>
-#include "Config.h"
-#include <chrono>
-
+#include <algorithm>
+#include <queue>
 using namespace std;
 
-MinHashOnePermutation::MinHashOnePermutation(int K, int L, int RangePow)
+typedef pair<int, float> PAIR;
+
+struct cmp {
+    bool operator()(const PAIR &a, const PAIR &b) {
+        return a.second > b.second; //lower is better
+    };
+};
+
+MinHashOnePermutation::MinHashOnePermutation(int numPartitions, int noOfBitsToHash)
 {
-	// K is the number of hash functions
-	// L is the number of hash tables
-	// SLIDE uses K different hash functions for L different tables
-	// So in total their are K * L hash functions for SLIDE to use
-	_K = K;
-	_L = L;
-	_RangePow = RangePow;
-	_bucket = new Bucket*[L];
 
-//#pragma omp parallel for
-	for (int i = 0; i < L; i++)
-	{
-		_bucket[i] = new Bucket[1 << _RangePow];
-	}
+    _numpartitions = numPartitions;
+    _rangePow = noOfBitsToHash;
+    _lognumhash = log2(numPartitions);
 
-	rand1 = new int[_L];
 
-	std::random_device rd;
-	std::mt19937 gen(rd());
-	std::uniform_int_distribution<> dis(1, INT_MAX);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(1, INT_MAX);
 
-//#pragma omp parallel for
-	for (int i = 0; i < _L; i++)
-	{
-		rand1[i] = dis(gen);
-		if (rand1[i] % 2 == 0)
-			rand1[i]++;
-	}
+    _randa = dis(gen);
+    if (_randa % 2 == 0)
+        _randa++;
+    _randHash = new int[2];
+    _randHash[0] = dis(gen);
+    if (_randHash[0] % 2 == 0)
+        _randHash[0]++;
+    _randHash[1] = dis(gen);
+    if (_randHash[1] % 2 == 0)
+        _randHash[1]++;
+
 }
 
 
-void MinHashOnePermutation::clear()
+void MinHashOnePermutation::getMap(int n, int* binids)
 {
-    for (int i = 0; i < _L; i++)
+	// 1 => <1 0 0 0 0 >
+	// Creates bit vector of size rangePow
+    int range = 1 << _rangePow;
+    // binsize is the number of times the range is larger than the total number of hashes we need.
+    int binsize = ceil(1.0*range / _numpartitions);
+
+	uint32_t curhash = MurmurHash ((char *)&n, (uint32_t) sizeof(n), (uint32_t)_randa);
+	//        unsigned int curhash = (unsigned int)(((unsigned int)h*i) << 5);
+	curhash = curhash & ((1<<_rangePow)-1);
+    for (int i = 0; i < n; i++)
     {
-    	delete[] _bucket[i];
-    	_bucket[i] = new Bucket[1 << _RangePow];
+        binids[i] = (int)floor(curhash / binsize);;
+    }
+
+}
+
+
+int * DensifiedMinhash::getHashEasy(int* binids, float* data, int dataLen, int topK)
+{
+
+    // binsize is the number of times the range is larger than the total number of hashes we need.
+// read the data and add it to priority queue O(dlogk approx 7d) with index as key and values as priority value, get topk index O(1) and apply minhash on retuned index.
+
+    priority_queue<PAIR, vector<PAIR>, cmp> pq;
+
+    for (int i = 0; i < topK; i++)
+    {
+        pq.push(std::make_pair(i,data[i]));
+    }
+
+    for (int i = topK; i < dataLen; i++)
+    {
+        pq.push(std::make_pair(i,data[i]));
+        pq.pop();
+    }
+
+
+
+    int *hashes = new int[_numhashes];
+    //float *values = new float[_numhashes];
+    int *hashArray = new int[_numhashes];
+
+    for (int i = 0; i < _numhashes; i++)
+    {
+        hashes[i] = INT_MIN;
+    }
+
+
+    for (int i = 0; i < topK; i++)
+    {
+        PAIR pair = pq.top();
+        pq.pop();
+        int index = pair.first;
+        int binid = binids[index];
+        if (hashes[binid] < index) {
+            hashes[binid] = index;
+        }
+    }
+
+
+    for (int i = 0; i < _numhashes; i++)
+    {
+        int next = hashes[i];
+        if (next != INT_MIN)
+        {
+            hashArray[i] = hashes[i];
+            continue;
+        }
+        int count = 0;
+        while (next == INT_MIN)
+        {
+            count++;
+            int index = std::min(
+                    getRandDoubleHash(i, count),
+                    _numhashes);
+
+            next = hashes[index]; // Kills GPU.
+            if (count > 100) // Densification failure.
+                break;
+        }
+        hashArray[i] = next;
+    }
+    delete[] hashes;
+    return hashArray;
+}
+
+
+int * DensifiedMinhash::getHash(int* indices, float* data, int* binids, int dataLen)
+{
+    int *hashes = new int[_numhashes];
+    int *hashArray = new int[_numhashes];
+
+    for (int i = 0; i < _numhashes; i++)
+    {
+        hashes[i] = INT_MIN;
+    }
+
+    if (dataLen<0){
 
     }
+
+    for (int i = 0; i < dataLen; i++)
+    {
+        int binid = binids[indices[i]];
+
+        if (hashes[binid] < indices[i]){
+            hashes[binid] = indices[i];
+        }
+    }
+
+    for (int i = 0; i < _numhashes; i++)
+    {
+        int next = hashes[i];
+        if (next != INT_MIN)
+        {
+            hashArray[i] = hashes[i];
+            continue;
+        }
+        int count = 0;
+        while (next == INT_MIN)
+        {
+            count++;
+            int index = std::min(
+                    getRandDoubleHash(i, count),
+                    _numhashes);
+
+            next = hashes[index]; // Kills GPU.
+            if (count > 100) // Densification failure.
+                break;
+        }
+        hashArray[i] = next;
+    }
+    delete[] hashes;
+    //   delete[] values;
+    return hashArray;
 }
 
 
-void MinHashOnePermutation::count()
-{
-	for (int j=0; j<_L;j++) {
-		int total = 0;
-		for (int i = 0; i < 1 << _RangePow; i++) {
-			if (_bucket[j][i].getSize()!=0) {
-				cout <<_bucket[j][i].getSize() << " ";
-			}
-			total += _bucket[j][i].getSize();
-		}
-		cout << endl;
-		cout <<"TABLE "<< j << "Total "<< total << endl;
-	}
+int DensifiedMinhash::getRandDoubleHash(int binid, int count) {
+    unsigned int tohash = ((binid + 1) << 6) + count;
+    return (_randHash[0] * tohash << 3) >> (32 - _lognumhash); // _lognumhash needs to be ceiled.
 }
 
 
-int* MinHashOnePermutation::hashesToIndex(int * hashes)
+DensifiedMinhash::~DensifiedMinhash()
 {
-
-	int * indices = new int[_L];
-	for (int i = 0; i < _L; i++)
-	{
-		unsigned int index = 0;
-
-		for (int j = 0; j < _K; j++)
-		{
-
-			if (HashFunction==4){
-				unsigned int h = hashes[_K*i + j];
-				index += h<<(_K-1-j);
-			}else if (HashFunction==1 | HashFunction==2){
-                unsigned int h = hashes[_K*i + j];
-                index += h<<((_K-1-j)*(int)floor(log(binsize)));
-
-            }else {
-                unsigned int h = rand1[_K*i + j];
-                h *= rand1[_K * i + j];
-                h ^= h >> 13;
-                h ^= rand1[_K * i + j];
-                index += h * hashes[_K * i + j];
-            }
-		}
-		if (HashFunction==3) {
-			index = index&((1<<_RangePow)-1);
-		}
-		indices[i] = index;
-	}
-
-	return indices;
-}
-
-
-int* MinHashOnePermutation::add(int *indices, int id)
-{
-	int * secondIndices = new int[_L];
-	for (int i = 0; i < _L; i++)
-	{
-		secondIndices[i] = _bucket[i][indices[i]].add(id);
-	}
-
-	return secondIndices;
-}
-
-
-int MinHashOnePermutation::add(int tableId, int indices, int id)
-{
-	int secondIndices = _bucket[tableId][indices].add(id);
-	return secondIndices;
-}
-
-
-/*
-* Returns all the buckets
-*/
-int** MinHashOnePermutation::retrieveRaw(int *indices)
-{
-	int ** rawResults = new int*[_L];
-
-	for (int i = 0; i < _L; i++)
-	{
-		rawResults[i] = _bucket[i][indices[i]].getAll();
-	}
-	return rawResults;
-}
-
-
-int MinHashOnePermutation::retrieve(int table, int indices, int bucket)
-{
-	return _bucket[table][indices].retrieve(bucket);
-}
-
-MinHashOnePermutation::~MinHashOnePermutation()
-{
-	delete [] rand1;
-	 for (int i = 0; i < _L; i++)
-	 {
-	 	delete[] _bucket[i];
-	 }
-	 delete[] _bucket;
+    delete[] _randHash;
 }

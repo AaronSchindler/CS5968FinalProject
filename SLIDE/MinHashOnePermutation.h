@@ -1,24 +1,25 @@
 #pragma once
-#include "Bucket.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <chrono>
+#include <climits>
+#include <iostream>
 #include <random>
+#include <vector>
+#include <string.h>
+#include "MurmurHash.h"
 
-class MinHashOnePermutation {
+
+using namespace std;
+class MinHashOnePermutation
+{
 private:
-	Bucket ** _bucket;
-	int _K;
-	int _L;
-	int _RangePow;
-	int *rand1;
-
-
+    int *_randHash, _randa, _numpartitions, _rangePow,_lognumhash;
 public:
-	MinHashOnePermutation(int K, int L, int RangePow);
-	void clear();
-	int* add(int *indices, int id);
-	int add(int indices, int tableId, int id);
-	int * hashesToIndex(int * hashes);
-	int** retrieveRaw(int *indices);
-	int retrieve(int table, int indices, int bucket);
-	void count();
-	~MinHashOnePermutation();
+    MinHashOnePermutation(int numPartitions, int noOfBitsToHash);
+    int * getHash(int* indices, float* data, int* binids, int dataLen);
+    int getRandDoubleHash(int binid, int count);
+    int * getHashEasy(int* binids, float* data, int dataLen, int topK);
+    void getMap(int n, int* binid);
+    ~MinHashOnePermutation();
 };
