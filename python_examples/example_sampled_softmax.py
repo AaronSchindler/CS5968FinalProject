@@ -3,7 +3,8 @@ import time
 import math
 import os
 import glob
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 from config import config
 from itertools import islice
